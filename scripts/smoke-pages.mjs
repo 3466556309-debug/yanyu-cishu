@@ -203,6 +203,15 @@ async function main() {
     const before = await readLocalState();
     if (!before.hasState || before.active !== 60) throw new Error(`初始词库不对：${JSON.stringify(before)}`);
 
+    const pwa = await evaluate(`(async () => {
+      const registration = await navigator.serviceWorker.ready;
+      const keys = await caches.keys();
+      return { scope: registration.scope, state: registration.active?.state || '', caches: keys };
+    })()`, true).catch((error) => ({ error: error.message }));
+    if (pwa?.error || pwa?.state !== 'activated' || !pwa.caches?.some((key) => key.startsWith('yanyu-cishu-'))) {
+      throw new Error(`Service Worker / PWA 没有就绪：${JSON.stringify(pwa)}`);
+    }
+
     await click('[data-action="start-daily"]');
     await waitFor("!!document.querySelector('#practice-card .prompt-term')", 10000, '进入练习');
     const term = await evaluate("document.querySelector('#practice-card .prompt-term').textContent.trim()");
@@ -250,6 +259,7 @@ async function main() {
       ok: true,
       url,
       initialWords: before.active,
+      pwa: { scope: pwa.scope, state: pwa.state, caches: pwa.caches },
       reviewed: { checkins: reviewed.checkins, total: reviewed.total, learned: reviewed.learned },
       final: { active: final.active, custom: final.custom, total: final.total },
       dialogs: dialogCount,
