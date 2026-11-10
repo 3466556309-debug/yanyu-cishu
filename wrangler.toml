@@ -1,0 +1,28 @@
+# 言语词库 V1 · Cloudflare Workers 免费档配置
+#
+# 发布前请先看 docs/CF-DEPLOY-acceptance.md。
+# 不要在这个文件里写任何密钥；D1 的 database_id 只是资源标识，不是密钥。
+# 首次发布运行 `npm run cf:release`，脚本会在需要时创建免费 D1 并回填 database_id。
+name = "yanyu-cishu"
+main = "worker/index.mjs"
+compatibility_date = "2026-10-01"
+workers_dev = true
+
+# 只使用免费档：Workers + D1 + workers.dev。
+# 没有 Durable Objects、R2、自定义域名或任何付费绑定。
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+# API 必须先交给 Worker；其余路径由静态资源直接返回。
+run_worker_first = ["/api/*"]
+# 访问不存在的页面时回退到 index.html（应用是单页）。
+not_found_handling = "single-page-application"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "yanyu-cishu"
+# 占位 ID：`npm run cf:release` 会创建/发现免费 D1 后自动回填。
+# 手动发布时，用 `npx wrangler d1 create yanyu-cishu` 输出的 uuid 替换这一行。
+database_id = "5ee58e77-6edc-4d76-8b3b-e71e6a330ed1"
+migrations_dir = "migrations"

@@ -1,6 +1,6 @@
 import { icon } from './icons.js';
-import { groupsForWord, activeWords, todayPlan, TYPE_LABELS, isLearned } from '/shared/selectors.mjs';
-import { localDay } from '/shared/schedule.mjs';
+import { groupsForWord, activeWords, todayPlan, TYPE_LABELS, isLearned } from '../shared/selectors.mjs';
+import { localDay } from '../shared/schedule.mjs';
 import { attr, escapeHtml, highlightTerm, shuffle, unique } from './util.js';
 import { renderShell, syncLabel } from './views.js';
 

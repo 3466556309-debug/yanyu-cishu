@@ -1,6 +1,7 @@
 import { icon } from './icons.js';
 import * as api from './api.js';
 import * as localDb from './db.js';
+import { IS_LOCAL_ONLY } from './mode.js';
 import { parseImport, buildImportOps } from './importer.js';
 import {
   renderAuth, renderRoute, renderWordList, renderWordModal, renderWordDetail,
@@ -11,15 +12,18 @@ import {
   canAdvance, completeCurrent, renderPractice, startGroupStudy,
   startMistakeStudy, startPlanStudy, startSingleStudy,
 } from './practice.js';
-import { applyOp, applyOps } from '/shared/reducer.mjs';
-import { localDay } from '/shared/schedule.mjs';
-import { activeWords } from '/shared/selectors.mjs';
+import { applyOp, applyOps } from '../shared/reducer.mjs';
+import { localDay } from '../shared/schedule.mjs';
+import { activeWords } from '../shared/selectors.mjs';
+import { createSeedState } from '../shared/seed.mjs';
 import { escapeHtml, parseRoute, uid } from './util.js';
 
 const SESSION_KEY = 'yanyu.session';
 const LAST_USER_KEY = 'yanyu.lastUser';
+const LOCAL_USER = Object.freeze({ id: 'local-user', username: '本机词库', createdAt: '' });
 
 const app = {
+  localOnly: IS_LOCAL_ONLY,
   session: null,
   authenticated: false,
   state: null,
@@ -30,6 +34,7 @@ const app = {
   reachable: true,
   syncing: false,
   sync: { lastSuccessAt: 0, lastError: '', failures: 0 },
+  storageAvailable: true,
   study: null,
   ui: {
     authTab: 'login',
@@ -85,51 +90,104 @@ async function init() {
     history.replaceState(null, '', '#/home');
     app.route = { name: 'home', id: '', tail: '' };
   }
-  const session = loadSession();
-  if (session) {
-    app.session = session;
-    app.authenticated = true;
-    app.ui.authUsername = session.user.username;
-    try {
-      const local = await localDb.loadLocal(session.user.id);
-      app.pendingOps = local.ops || [];
-      if (local.snapshot?.state) {
-        app.state = local.snapshot.state;
-        app.revision = Number(local.snapshot.revision) || 0;
-        app.booted = true;
-        render();
-        syncNow();
-      } else if (navigator.onLine) {
-        renderBoot('正在取回你的词库…');
-        const ok = await syncNow();
-        if (!ok && !app.state) {
+
+  if (app.localOnly) {
+    await initLocalOnly();
+  } else {
+    const session = loadSession();
+    if (session) {
+      app.session = session;
+      app.authenticated = true;
+      app.ui.authUsername = session.user.username;
+      try {
+        const local = await localDb.loadLocal(session.user.id);
+        app.pendingOps = local.ops || [];
+        if (local.snapshot?.state) {
+          app.state = local.snapshot.state;
+          app.revision = Number(local.snapshot.revision) || 0;
+          app.booted = true;
+          render();
+          syncNow();
+        } else if (navigator.onLine) {
+          renderBoot('正在取回你的词库…');
+          const ok = await syncNow();
+          if (!ok && !app.state) {
+            app.authenticated = false;
+            app.authNotice = '这台设备还没有保存过你的词库。请先联网登录一次，之后就能离线使用。';
+            render();
+          }
+        } else {
           app.authenticated = false;
-          app.authNotice = '这台设备还没有保存过你的词库。请先联网登录一次，之后就能离线使用。';
+          app.authNotice = '这台设备还没有保存过这个词库。第一次使用需要联网；已经登录并使用过之后，断网也能继续学。';
           render();
         }
-      } else {
+      } catch (error) {
+        console.error(error);
         app.authenticated = false;
-        app.authNotice = '这台设备还没有保存过这个词库。第一次使用需要联网；已经登录并使用过之后，断网也能继续学。';
+        app.authNotice = '这台设备上保存的内容读不出来。请刷新页面再试，或联网后重新登录。';
         render();
       }
-    } catch (error) {
-      console.error(error);
-      app.authenticated = false;
-      app.authNotice = '这台设备上保存的内容读不出来。请刷新页面再试，或联网后重新登录。';
+    } else {
+      app.ui.authUsername = (() => {
+        try { return localStorage.getItem(LAST_USER_KEY) || ''; } catch { return ''; }
+      })();
       render();
     }
+    setInterval(() => {
+      if (app.session && app.state && navigator.onLine && document.visibilityState === 'visible') syncNow();
+    }, 45000);
+  }
+
+  registerServiceWorker();
+}
+
+/**
+ * GitHub Pages 静态版：不登录、不请求接口，词库固定保存在这个浏览器的 IndexedDB。
+ * 第一次打开时复制一份初始高频词，之后只改这一份。
+ */
+async function initLocalOnly() {
+  app.localOnly = true;
+  app.session = {
+    token: '',
+    user: { ...LOCAL_USER, createdAt: new Date().toISOString().slice(0, 10) },
+    savedAt: new Date().toISOString(),
+  };
+  app.authenticated = true;
+  app.ui.authUsername = LOCAL_USER.username;
+  renderBoot('正在打开这台设备上的词库…');
+
+  let local = { snapshot: null, ops: [] };
+  try {
+    local = await localDb.loadLocal(LOCAL_USER.id);
+  } catch (error) {
+    console.error('[local-store]', error);
+    app.storageAvailable = false;
+  }
+
+  if (local.snapshot?.state?.words) {
+    app.state = local.snapshot.state;
+    app.revision = Number(local.snapshot.revision) || 1;
+    app.sync.lastSuccessAt = Date.parse(local.snapshot.cachedAt || '') || Date.now();
   } else {
-    app.ui.authUsername = (() => {
-      try { return localStorage.getItem(LAST_USER_KEY) || ''; } catch { return ''; }
-    })();
-    render();
+    app.state = createSeedState();
+    app.revision = 1;
+    app.sync.lastSuccessAt = Date.now();
+    persistLocal();
   }
-  setInterval(() => {
-    if (app.session && app.state && navigator.onLine && document.visibilityState === 'visible') syncNow();
-  }, 45000);
-  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
+
+  app.pendingOps = [];
+  app.booted = true;
+  render();
+  if (!app.storageAvailable) {
+    toast('这个浏览器没有允许本机存储。现在可以继续用，但刷新后进度可能留不住。', 'warn');
   }
+}
+
+function registerServiceWorker() {
+  if (!('serviceWorker' in navigator) || location.protocol === 'file:') return;
+  // 相对路径才能同时适配根域名和 GitHub Pages 的 /yanyu-cishu/ 前缀。
+  const workerUrl = new URL('../sw.js', import.meta.url);
+  navigator.serviceWorker.register(workerUrl).catch(() => {});
 }
 
 /* ==================== 渲染 ==================== */
@@ -200,24 +258,37 @@ function persistLocal() {
     revision: app.revision,
     cachedAt: new Date().toISOString(),
   };
-  const ops = [...app.pendingOps];
+  const ops = app.localOnly ? [] : [...app.pendingOps];
+  if (app.localOnly) app.sync.lastSuccessAt = Date.now();
   saveChain = saveChain
     .then(() => localDb.saveLocal(userId, snapshot, ops))
+    .then(() => { app.storageAvailable = true; })
     .catch((error) => {
       console.error(error);
+      app.storageAvailable = false;
       if (!storageWarned) {
         storageWarned = true;
-        showToast('这台设备没有保存离线内容。请保持联网使用，或换一个普通浏览窗口。', 'warn');
+        showToast(
+          app.localOnly
+            ? '这个浏览器没有保存成功。刷新后进度可能留不住，请换个普通浏览窗口再试。'
+            : '这台设备没有保存离线内容。请保持联网使用，或换一个普通浏览窗口。',
+          'warn',
+        );
       }
     });
 }
 
 function scheduleSync(delay = 700) {
+  if (app.localOnly) return;
   clearTimeout(syncTimer);
   syncTimer = setTimeout(() => { if (app.online && app.session) syncNow(); }, delay);
 }
 
 async function syncNow(options = {}) {
+  if (app.localOnly) {
+    if (options.manual) showToast('已经保存在这台浏览器里。');
+    return true;
+  }
   if (!app.session?.token) return false;
   if (!navigator.onLine) {
     app.online = false;
@@ -330,7 +401,7 @@ function dispatch(op, options = {}) {
     return false;
   }
   app.state = result.state;
-  app.pendingOps.push(op);
+  if (!app.localOnly) app.pendingOps.push(op);
   persistLocal();
   scheduleSync();
   if (options.render !== false) render({ keepScroll: true });
@@ -343,7 +414,7 @@ function dispatchMany(ops, options = {}) {
   const skippedIndexes = new Set(result.skipped.map((item) => item.index));
   const accepted = ops.filter((_, index) => !skippedIndexes.has(index));
   app.state = result.state;
-  app.pendingOps.push(...accepted);
+  if (!app.localOnly) app.pendingOps.push(...accepted);
   persistLocal();
   scheduleSync();
   if (options.render !== false) render({ keepScroll: true });
@@ -884,6 +955,10 @@ function exportData() {
 }
 
 function doLogout() {
+  if (app.localOnly) {
+    toast('这是静态版，不用登录；数据只保存在这台浏览器。');
+    return;
+  }
   const pending = app.pendingOps.length;
   const message = pending
     ? `还有 ${pending} 条学习记录没有保存到账号。它们会先留在这台设备，下次用同一个账号登录会继续保存。确定现在退出吗？`
@@ -924,6 +999,7 @@ function bindEvents() {
     app.online = true;
     app.reachable = true;
     updateSyncBadges();
+    if (app.localOnly) return;
     toast('网络恢复了，正在把记录保存好…');
     syncNow();
   });
@@ -931,9 +1007,14 @@ function bindEvents() {
     app.online = false;
     app.reachable = false;
     updateSyncBadges();
+    if (app.localOnly) return;
     toast('现在没有网络。学习记录会先放在这台设备，联网后自动保存。', 'warn');
   });
   document.addEventListener('visibilitychange', () => {
+    if (app.localOnly) {
+      if (document.visibilityState === 'hidden') persistLocal();
+      return;
+    }
     if (document.visibilityState === 'visible' && app.session && app.state) syncNow();
     else persistLocal();
   });

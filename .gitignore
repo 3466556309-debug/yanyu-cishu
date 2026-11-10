@@ -4,6 +4,10 @@ testdeps/
 data/*.json
 data/backups/
 data/*.tmp
+dist/
+pages-dist/
+.wrangler/
+.dev.vars
 .env
 .DS_Store
 *.log

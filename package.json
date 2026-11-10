@@ -6,9 +6,17 @@
   "description": "言语理解成语与实词记忆系统",
   "scripts": {
     "start": "node server/server.mjs",
-    "test": "node --test tests/*.test.mjs"
+    "test": "node --test tests/*.test.mjs",
+    "pages:build": "node scripts/build-pages.mjs",
+    "cf:build": "node scripts/build-cf-assets.mjs",
+    "cf:check": "node scripts/cf-release.mjs --check",
+    "cf:dev": "npm run cf:build && wrangler d1 migrations apply yanyu-cishu --local && wrangler dev --port 8787",
+    "cf:release": "node scripts/cf-release.mjs"
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "wrangler": "^4.159.0"
   }
 }

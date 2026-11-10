@@ -2,8 +2,8 @@ import { icon } from './icons.js';
 import {
   activeGroups, activeWords, dueWords, groupsForWord, mistakeEntries, stats, todayPlan,
   TYPE_LABELS, wordProgress,
-} from '/shared/selectors.mjs';
-import { localDay } from '/shared/schedule.mjs';
+} from '../shared/selectors.mjs';
+import { localDay } from '../shared/schedule.mjs';
 import {
   attr, escapeHtml, formatDateCN, formatDateTimeCN, highlightTerm, initials,
 } from './util.js';
@@ -20,6 +20,10 @@ const NAV = [
 export { NAV };
 
 export function syncLabel(app) {
+  if (app.localOnly) {
+    if (!app.storageAvailable) return { cls: 'offline', text: '本机存储不可用', icon: 'cloudOff' };
+    return { cls: 'local', text: '已存在本机', icon: 'lock' };
+  }
   if (!app.online) return { cls: 'offline', text: '离线 · 稍后自动保存', icon: 'cloudOff' };
   if (app.syncing) return { cls: 'pending', text: '正在保存…', icon: 'refresh' };
   if (app.pendingOps.length) return { cls: 'pending', text: `还有 ${app.pendingOps.length} 条等联网保存`, icon: 'cloudOff' };
@@ -29,7 +33,8 @@ export function syncLabel(app) {
 
 function syncChip(app, extraClass = '') {
   const state = syncLabel(app);
-  return `<span class="sync-chip ${state.cls} ${extraClass}" data-sync-chip title="学习记录会自动保存">${icon(state.icon, 13)}${escapeHtml(state.text)}</span>`;
+  const title = app.localOnly ? '只保存在这台设备的浏览器里' : '学习记录会自动保存';
+  return `<span class="sync-chip ${state.cls} ${extraClass}" data-sync-chip title="${title}">${icon(state.icon, 13)}${escapeHtml(state.text)}</span>`;
 }
 
 export function renderAuth(app) {
@@ -126,7 +131,9 @@ export function renderShell(app, content, options = {}) {
           <span class="avatar">${escapeHtml(initials(app.session?.user?.username))}</span>
           <div><strong>${escapeHtml(app.session?.user?.username || '')}</strong><span>${due ? `${due} 个词待复习` : '今日复习已清空'}</span></div>
         </div>
-        <button class="sidebar-logout" data-action="logout">退出登录</button>
+        ${app.localOnly
+          ? '<p class="sidebar-motto">不用登录 · 只保存在这台浏览器</p>'
+          : '<button class="sidebar-logout" data-action="logout">退出登录</button>'}
         <p class="sidebar-motto">“温故而知新，可以为师矣。”</p>
       </div>
     </aside>
@@ -503,8 +510,39 @@ function radioCard(name, value, current, title, desc) {
 export function renderSettings(app) {
   const settings = app.state.settings;
   const state = syncLabel(app);
+  const local = Boolean(app.localOnly);
+  const headNote = local
+    ? '这里改的是你自己的计划。所有内容只保存在这台设备的浏览器里，不用登录。'
+    : '这里改的是你自己的计划，不会影响别人。改动会马上保存在这台设备，联网后自动保存。';
+  const accountCard = local ? `
+        <section class="card settings-card">
+          <h2>本机数据</h2><p class="card-desc">没有账号，也不需要登录。词库和进度只在这个浏览器里。</p>
+          <div class="profile-box"><span class="avatar">${escapeHtml(initials(app.session?.user?.username))}</span><div><strong>${escapeHtml(app.session?.user?.username || '本机词库')}</strong><span>只存在这台设备</span></div></div>
+          <div class="setting-row"><div class="setting-copy"><strong>带走我的数据</strong><span>下载一个备份文件，包含词库、学习进度和统计。别人看不到你的词库。</span></div><button class="btn small" data-action="export-data">${icon('download', 14)}下载备份</button></div>
+          <div class="setting-row"><div class="setting-copy"><strong>换设备或换浏览器</strong><span>进度不会自动跟过去。可以用备份文件留底，但本静态版不提供导入整份备份的入口。</span></div></div>
+        </section>` : `
+        <section class="card settings-card">
+          <h2>账号</h2><p class="card-desc">只靠用户名和密码区分每个人的词库。</p>
+          <div class="profile-box"><span class="avatar">${escapeHtml(initials(app.session?.user?.username))}</span><div><strong>${escapeHtml(app.session?.user?.username || '')}</strong><span>注册于 ${formatDateCN((app.session?.user?.createdAt || '').slice(0, 10), { short: true }) || '今天'}</span></div></div>
+          <div class="setting-row"><div class="setting-copy"><strong>修改密码</strong><span>改完以后，其他设备需要重新登录。</span></div><button class="btn small" data-action="change-password">${icon('key', 14)}修改密码</button></div>
+          <div class="setting-row"><div class="setting-copy"><strong>带走我的数据</strong><span>下载一个备份文件，包含词库、学习进度和统计，不含密码。</span></div><button class="btn small" data-action="export-data">${icon('download', 14)}下载备份</button></div>
+          <div class="setting-row"><div class="setting-copy"><strong>退出登录</strong><span>学习记录会留下；如果还有没送出的学习记录，下次登录同一账号会继续保存。</span></div><button class="btn small danger" data-action="logout">${icon('logOut', 14)}退出</button></div>
+        </section>`;
+  const storageCard = local ? `
+        <section class="card settings-card">
+          <h2>本机保存</h2><p class="card-desc">不用手动点保存。每次改动都会自动写进这台浏览器的 IndexedDB。</p>
+          <div class="setting-row"><div class="setting-copy"><strong>现在的状态</strong><span>${state.cls === 'offline' ? '这个浏览器没有允许保存，刷新后进度可能留不住。' : '词库和进度只保存在这台浏览器，没有上传到服务器。'}</span></div><span class="sync-chip ${state.cls}" data-sync-chip>${icon(state.icon, 13)}${escapeHtml(state.text)}</span></div>
+          <div class="setting-row"><div class="setting-copy"><strong>上次保存</strong><span>${app.sync.lastSuccessAt ? formatDateTimeCN(app.sync.lastSuccessAt) : '还没有在这台设备上保存过'}</span></div><button class="btn small" data-action="manual-sync">立即保存</button></div>
+          <div class="about-box"><b>请留意：</b>换手机、换电脑或换浏览器，进度和词库不会自动跟着走。<b>清理浏览器的网站数据也会把词库一起清掉。</b>重要内容请偶尔下载备份。这个静态版不收集账号、不上传词库，也不跨设备同步。</div>
+        </section>` : `
+        <section class="card settings-card">
+          <h2>保存与离线</h2><p class="card-desc">不用手动点保存。学习时先记在这台设备，联网后会送回你的账号。</p>
+          <div class="setting-row"><div class="setting-copy"><strong>现在的状态</strong><span>${state.cls === 'offline' ? '没有联网，学习记录先放在这台设备。' : state.cls === 'pending' ? '有记录还没送回你的账号，稍后会自动再试。' : '学习记录已经保存。'}</span></div><span class="sync-chip ${state.cls}" data-sync-chip>${icon(state.icon, 13)}${escapeHtml(state.text)}</span></div>
+          <div class="setting-row"><div class="setting-copy"><strong>上次保存成功</strong><span>${app.sync.lastSuccessAt ? formatDateTimeCN(app.sync.lastSuccessAt) : '还没有在这台设备上保存过'}</span></div><button class="btn small" data-action="manual-sync">立即保存</button></div>
+          <div class="about-box"><b>离线怎么用：</b>第一次登录并打开过一次后，浏览器会记住页面和你的词库。断网时照样可以学；重新有网，页面会自动把这段时间的记录送回去。换电脑或换浏览器，用同一个用户名和密码登录就能接上。</div>
+        </section>`;
   return `<div class="page">
-    <div class="page-head"><div><div class="eyebrow">按自己的节奏来</div><h1>设置</h1><p>这里改的是你自己的计划，不会影响别人。改动会马上保存在这台设备，联网后自动保存。</p></div><div class="page-actions"><button class="btn small" data-action="manual-sync">${icon('refresh', 14)}立即保存</button></div></div>
+    <div class="page-head"><div><div class="eyebrow">按自己的节奏来</div><h1>设置</h1><p>${headNote}</p></div><div class="page-actions">${local ? syncChip(app) : `<button class="btn small" data-action="manual-sync">${icon('refresh', 14)}立即保存</button>`}</div></div>
     <div class="settings-grid">
       <div>
         <section class="card settings-card">
@@ -537,21 +575,10 @@ export function renderSettings(app) {
             </div>
           </div>
         </section>
-        <section class="card settings-card">
-          <h2>账号</h2><p class="card-desc">只靠用户名和密码区分每个人的词库。</p>
-          <div class="profile-box"><span class="avatar">${escapeHtml(initials(app.session?.user?.username))}</span><div><strong>${escapeHtml(app.session?.user?.username || '')}</strong><span>注册于 ${formatDateCN((app.session?.user?.createdAt || '').slice(0, 10), { short: true }) || '今天'}</span></div></div>
-          <div class="setting-row"><div class="setting-copy"><strong>修改密码</strong><span>改完以后，其他设备需要重新登录。</span></div><button class="btn small" data-action="change-password">${icon('key', 14)}修改密码</button></div>
-          <div class="setting-row"><div class="setting-copy"><strong>带走我的数据</strong><span>下载一个备份文件，包含词库、学习进度和统计，不含密码。</span></div><button class="btn small" data-action="export-data">${icon('download', 14)}下载备份</button></div>
-          <div class="setting-row"><div class="setting-copy"><strong>退出登录</strong><span>学习记录会留下；如果还有没送出的学习记录，下次登录同一账号会继续保存。</span></div><button class="btn small danger" data-action="logout">${icon('logOut', 14)}退出</button></div>
-        </section>
+        ${accountCard}
       </div>
       <div>
-        <section class="card settings-card">
-          <h2>保存与离线</h2><p class="card-desc">不用手动点保存。学习时先记在这台设备，联网后会送回你的账号。</p>
-          <div class="setting-row"><div class="setting-copy"><strong>现在的状态</strong><span>${state.cls === 'offline' ? '没有联网，学习记录先放在这台设备。' : state.cls === 'pending' ? '有记录还没送回你的账号，稍后会自动再试。' : '学习记录已经保存。'}</span></div><span class="sync-chip ${state.cls}" data-sync-chip>${icon(state.icon, 13)}${escapeHtml(state.text)}</span></div>
-          <div class="setting-row"><div class="setting-copy"><strong>上次保存成功</strong><span>${app.sync.lastSuccessAt ? formatDateTimeCN(app.sync.lastSuccessAt) : '还没有在这台设备上保存过'}</span></div><button class="btn small" data-action="manual-sync">立即保存</button></div>
-          <div class="about-box"><b>离线怎么用：</b>第一次登录并打开过一次后，浏览器会记住页面和你的词库。断网时照样可以学；重新有网，页面会自动把这段时间的记录送回去。换电脑或换浏览器，用同一个用户名和密码登录就能接上。</div>
-        </section>
+        ${storageCard}
         <section class="card settings-card">
           <h2>使用说明</h2><p class="card-desc">都是白话，不用记操作。</p>
           <div class="help-list">
@@ -563,7 +590,7 @@ export function renderSettings(app) {
         </section>
         <section class="card settings-card">
           <h2>关于</h2>
-          <div class="about-box"><b>言语词库 V1</b><br>初始词约 60 个：成语 32 个、实词 28 个。选词参考近五年国考、省考和事业单位公开真题中的高频词；例句据公开真题语境改写或编写，不是整套题库原文。<br><br>这是一个独立工具，和“公考错题本”不互通、不共用账号和数据。<br><br>不提供“一键清空”，避免误删。重要数据建议偶尔下载备份。</div>
+          <div class="about-box"><b>言语词库 V1 · GitHub Pages 静态版</b><br>初始词约 60 个：成语 32 个、实词 28 个。选词参考近五年国考、省考和事业单位公开真题中的高频词；例句据公开真题语境改写或编写，不是整套题库原文。<br><br>这是一个独立工具，和“公考错题本”不互通、不共用账号和数据。<br><br>${local ? '所有数据只在你的浏览器里，没有登录、没有服务器数据库，也不跨设备同步。' : ''}<br>不提供“一键清空”，避免误删。重要数据建议偶尔下载备份。</div>
         </section>
       </div>
     </div>

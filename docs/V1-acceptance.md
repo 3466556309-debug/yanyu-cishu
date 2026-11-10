@@ -4,6 +4,8 @@
 > 版本：V1 / 2026-11-10  
 > 范围：只做到任务书「最小可交」；不扩范围，不另起品牌包装。  
 > 项目目录：`/workspace/dsh-projects/yanyu-cishu/`（独立项目，未改动「公考错题本」）
+>
+> **后续补充（2026-11-10）：** Cloudflare Workers + D1 免费档的实现与发布说明见 `docs/CF-DEPLOY-acceptance.md`；本文保留 V1 当时的历史验收记录。
 
 ---
 
