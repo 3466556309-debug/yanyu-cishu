@@ -1,0 +1,11 @@
+node_modules/
+.test-deps/
+testdeps/
+data/*.json
+data/backups/
+data/*.tmp
+.env
+.DS_Store
+*.log
+.playwright/
+.tunnel/
