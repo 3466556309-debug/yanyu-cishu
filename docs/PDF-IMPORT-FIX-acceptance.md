@@ -81,7 +81,7 @@ node scripts/smoke-import.mjs --dir pages-dist /yanyu-cishu/
 
 - 正常 Chrome：打开成功，预览 **842 条**，首条“源远流长 | 源头远，水流长。也比喻历史悠久。”；预览含“博大精深”“一脉相承”“媲美”等，未出现“大类/5个/第一组/更多免费考公资料”作为词条。
 - 模拟 Safari module Worker 不可用（页面里让 `window.Worker` 构造直接抛错）：仍打开成功，同样 842 条。
-- 伪造坏 PDF：提示“这个 PDF 文件本身无效或没有下载完整”，不再误报成 Worker 问题。
+- 伪造坏 PDF 和空 PDF：都提示“这个 PDF 文件本身无效或没有下载完整”，不再误报成 Worker 问题。
 
 ### 公网
 
@@ -106,6 +106,6 @@ node scripts/smoke-import.mjs --dir pages-dist /yanyu-cishu/
 
 ## 六、发布
 
-- 源码：`master`，提交 `cf41a2b`（“修复 PDF 导入：Worker 回退、按坐标抽多列表格、区分失败原因”）。
-- GitHub Pages 产物：`gh-pages`，提交 `d9fc66f`（“发布：修复真实讲义 PDF 导入与失败提示”）。
+- 源码功能提交：`master`，提交 `d0fea82`（含 Worker 回退、按坐标抽多列表格、失败原因区分；前一功能提交为 `cf41a2b`）。
+- GitHub Pages 产物：`gh-pages`，提交 `0b61f33`（含前一次发布 `d9fc66f` 的 PDF 修复和本次空文件提示补丁）。
 - 已更新地址：**https://3466556309-debug.github.io/yanyu-cishu/**
