@@ -699,7 +699,7 @@ export function renderImportModal() {
         <form id="import-form" novalidate>
           <div class="field">
             <label for="import-file">选择文件</label>
-            <input class="input" id="import-file" type="file" accept=".csv,.txt,.tsv,.json,.xlsx,.xls,.xlsm,.docx,.pdf,.jpg,.jpeg,.png,.webp,.bmp,.gif,text/csv,text/plain,application/json,application/pdf,image/*">
+            <input class="input" id="import-file" type="file" accept=".csv,.txt,.tsv,.json,.xlsx,.xls,.xlsm,.docx,.doc,.pdf,.jpg,.jpeg,.png,.webp,.bmp,.gif,text/csv,text/plain,application/json,application/pdf,image/*">
             <span class="hint">手机上可以直接从相册选图片。旧版 .doc 请先在 Word 里另存为 .docx 或 PDF。</span>
           </div>
           <div class="import-status" id="import-status" role="status" aria-live="polite"></div>
