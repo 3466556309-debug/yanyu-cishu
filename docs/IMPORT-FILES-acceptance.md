@@ -113,6 +113,8 @@ node scripts/smoke-import.mjs https://3466556309-debug.github.io/yanyu-cishu/
 
 控制台错误：无。
 
+另外，本机 Pages 产物的导入冒烟是在与 Cloudflare `_headers` 相同的 CSP 下跑的（含 `worker-src 'self'`、`'wasm-unsafe-eval'`、`connect-src 'self' data:`），结果为通过；这覆盖了登录版静态资源将来直接复用的场景。
+
 ### 4.3 公网静态资源检查
 
 发布后对以下地址逐一 `curl`，全部 **HTTP 200**：
@@ -144,7 +146,7 @@ Pages 应用外壳缓存版本已升到 `yanyu-cishu-v3-20261111-1`。已经在�
 - 没有删除任何用户数据；导入只新增词条，重复的跳过。
 - 没有提交 `data/app-data.json`、`data/backups/`、`.env`、`.wrangler/`、`node_modules/`、`dist/`、`pages-dist/` 或任何密钥。
 - 页面没有写本机局域网地址。
-- Cloudflare 静态资源构建 `dist/` 通过，包含相同的导入部件；`_headers` 的 CSP 已补 `'wasm-unsafe-eval'`，以便将来在 Cloudflare 上运行 OCR WASM（本轮未部署）。
+- Cloudflare 静态资源构建 `dist/` 通过，包含相同的导入部件；`_headers` 的 CSP 已补 `'wasm-unsafe-eval'`，并允许 `connect-src data:`（Tesseract 的 WASM 核心用 data URL 加载）。本轮用与 Cloudflare 相同的 CSP 在本地跑完整导入冒烟，Excel/Word/PDF/图片/扫描件/粘贴/离线全部通过，说明将来在登录版上也能用。
 - 没有改「公考错题本」仓库，没有占用或关闭它的 8080。
 - 没有拆 Cloudflare 站点，没有改练习/登录/同步逻辑。
 

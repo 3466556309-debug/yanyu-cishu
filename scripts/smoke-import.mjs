@@ -17,6 +17,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const FIXTURES = path.join(ROOT, 'tests', 'fixtures', 'import');
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const CSP = "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' data:; manifest-src 'self'; worker-src 'self'";
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -55,10 +56,11 @@ async function serveDir(dir, prefix = '/') {
       res.writeHead(200, {
         'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream',
         'Cache-Control': 'no-store',
+        'Content-Security-Policy': CSP,
       });
       res.end(await readFile(file));
     } catch {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Security-Policy': CSP });
       res.end(await readFile(path.join(root, 'index.html')));
     }
   });
