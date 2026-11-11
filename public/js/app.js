@@ -2,7 +2,8 @@ import { icon } from './icons.js';
 import * as api from './api.js';
 import * as localDb from './db.js';
 import { IS_LOCAL_ONLY } from './mode.js';
-import { parseImport, buildImportOps } from './importer.js';
+import { parseImport, parseImportSource, finalizeRecords, buildImportOps } from './importer.js';
+import { readImportFile, ImportFileError } from './import-files.js';
 import {
   renderAuth, renderRoute, renderWordList, renderWordModal, renderWordDetail,
   renderGroupModal, renderImportModal, renderPasswordModal, renderConfirmModal,
@@ -16,7 +17,7 @@ import { applyOp, applyOps } from '../shared/reducer.mjs';
 import { localDay } from '../shared/schedule.mjs';
 import { activeWords } from '../shared/selectors.mjs';
 import { createSeedState } from '../shared/seed.mjs';
-import { escapeHtml, parseRoute, uid } from './util.js';
+import { attr, escapeHtml, parseRoute, uid } from './util.js';
 
 const SESSION_KEY = 'yanyu.session';
 const LAST_USER_KEY = 'yanyu.lastUser';
@@ -48,6 +49,8 @@ const app = {
   modalNeedsRender: false,
   confirmHandler: null,
   booted: false,
+  importDraft: null,
+  importBusy: false,
 };
 
 let syncRunner = null;
@@ -855,56 +858,258 @@ function deleteGroup(groupId) {
   });
 }
 
-function handleImportFile(input) {
-  const file = input.files?.[0];
-  if (!file) return;
-  if (file.size > 2 * 1024 * 1024) {
-    showFormError('import-error', '文件有点大，请控制在 2MB 以内。');
-    return;
-  }
-  const reader = new FileReader();
-  reader.onload = () => {
-    const text = String(reader.result || '');
-    const area = document.getElementById('import-text');
-    if (area) area.value = text;
-    toast('文件已经读进来，确认内容后点“开始导入”。');
-  };
-  reader.onerror = () => showFormError('import-error', '这个文件读不出来，可以试着把内容直接粘贴进来。');
-  reader.readAsText(file, 'utf-8');
+function importLocation(item) {
+  if (!item) return '';
+  if (item.where) return `${item.where}第 ${item.line || '?'} 行`;
+  return item.line ? `第 ${item.line} 行` : '';
 }
 
-function handleImportSubmit(form) {
+function setImportStatus(message, kind = '') {
+  const box = document.getElementById('import-status');
+  if (!box) return;
+  box.hidden = !message;
+  box.className = `import-status ${kind}`.trim();
+  box.textContent = message || '';
+}
+
+function setImportBusy(busy) {
+  app.importBusy = busy;
+  const file = document.getElementById('import-file');
+  const area = document.getElementById('import-text');
+  if (file) file.disabled = busy;
+  if (area) area.disabled = busy;
+  updateImportButton();
+}
+
+function updateImportButton() {
+  const button = document.getElementById('import-submit');
+  if (!button) return;
+  if (app.importBusy) {
+    button.disabled = true;
+    button.textContent = '正在读取…';
+    return;
+  }
+  const count = document.querySelectorAll('#import-preview tbody tr').length;
+  if (app.importDraft) {
+    button.disabled = count === 0;
+    button.innerHTML = `${icon('check', 15)}确认导入 ${count} 条`;
+  } else {
+    button.disabled = false;
+    button.innerHTML = `${icon('upload', 15)}生成预览`;
+  }
+}
+
+function importWarningsHtml(warnings) {
+  if (!warnings?.length) return '';
+  return `<div class="import-warn"><strong>提醒：</strong>${warnings.map((item) => `<div>${escapeHtml(item)}</div>`).join('')}</div>`;
+}
+
+function importSkipHtml(parsed) {
+  const conflicts = parsed.conflicts || [];
+  const errors = parsed.errors || [];
+  const lines = [
+    ...conflicts.slice(0, 30).map((item) => `${importLocation(item)}「${escapeHtml(item.term || '')}」：${escapeHtml(item.reason)}`),
+    ...errors.slice(0, 30).map((item) => `${importLocation(item)}${escapeHtml(item.reason)}`),
+  ];
+  if (!lines.length) return '';
+  return `<details class="import-skip" ${conflicts.length + errors.length <= 6 ? 'open' : ''}>
+    <summary>跳过 ${conflicts.length + errors.length} 条（重复 ${conflicts.length}，不合格 ${errors.length}）</summary>
+    <ul>${lines.map((line) => `<li>${line}</li>`).join('')}</ul>
+    ${conflicts.length + errors.length > 30 ? '<div class="small muted">只列出前 30 条。</div>' : ''}
+  </details>`;
+}
+
+function renderImportPreview(parsed) {
+  const box = document.getElementById('import-preview');
+  if (!box) return;
+  const rows = parsed.rows || [];
+  const conflicts = parsed.conflicts || [];
+  const errors = parsed.errors || [];
+  const skipped = conflicts.length + errors.length;
+  const warningHtml = importWarningsHtml(parsed.warnings || []);
+  const skipHtml = importSkipHtml(parsed);
+
+  box.hidden = false;
+  box.innerHTML = `<div class="import-preview-head">
+      <div><strong>导入预览</strong>
+        <div class="small muted">将导入 <b id="import-keep-count">${rows.length}</b> 条；跳过 ${skipped} 条（重复 ${conflicts.length}，不合格 ${errors.length}）。确认前可以直接改下面的内容，或点垃圾桶去掉某条。</div>
+      </div>
+      <span class="pill">${parsed.sourceName ? escapeHtml(parsed.sourceName) : '当前内容'}</span>
+    </div>
+    ${warningHtml}
+    ${skipHtml}
+    ${rows.length ? `<div class="import-table-wrap"><table class="import-table"><thead><tr>
+      <th>类型</th><th>词语</th><th>释义</th><th>例句</th><th>来源</th><th>近义</th><th>干扰</th><th aria-label="去掉"></th>
+    </tr></thead><tbody>
+      ${rows.map((row, index) => `<tr data-line="${attr(row.line || '')}" data-where="${attr(row.where || '')}">
+        <td><select class="input" data-field="type" aria-label="类型">
+          <option value="idiom" ${row.type === 'idiom' ? 'selected' : ''}>成语</option>
+          <option value="word" ${row.type === 'word' ? 'selected' : ''}>实词</option>
+        </select></td>
+        <td><input class="input" data-field="term" value="${attr(row.term)}" aria-label="词语"></td>
+        <td><textarea class="textarea" data-field="definition" rows="2" aria-label="释义">${escapeHtml(row.definition)}</textarea></td>
+        <td><textarea class="textarea" data-field="example" rows="2" aria-label="例句">${escapeHtml(row.example)}</textarea></td>
+        <td><input class="input" data-field="source" value="${attr(row.source)}" aria-label="来源"></td>
+        <td><input class="input" data-field="near" value="${attr((row.near || []).join('、'))}" aria-label="近义"></td>
+        <td><input class="input" data-field="far" value="${attr((row.far || []).join('、'))}" aria-label="干扰"></td>
+        <td><button type="button" class="icon-btn import-remove" data-action="import-remove-row" aria-label="去掉这条">${icon('trash', 14)}</button></td>
+      </tr>`).join('')}
+    </tbody></table></div>` : '<div class="import-empty">没有找到可以导入的词条。看上面的原因；也可以改一改原文再生成预览。</div>'}
+    ${rows.length ? `<div class="small muted import-tip">只有“同一类型 + 词语完全一样”才算重复；重复的那几条会跳过，不会覆盖已有词。没有释义的不会强行入库。</div>` : ''}`;
+  updateImportButton();
+}
+
+async function handleImportFile(input) {
+  const file = input.files?.[0];
+  if (!file || app.importBusy) return;
+  app.importDraft = null;
   clearFormError('import-error');
-  const text = String(new FormData(form).get('text') || '').trim();
-  if (!text) return showFormError('import-error', '请粘贴词表内容，或选择一个文件。');
-  const parsed = parseImport(text, activeWords(app.state));
+  const resultBox = document.getElementById('import-result');
+  if (resultBox) { resultBox.hidden = true; resultBox.innerHTML = ''; }
+  const preview = document.getElementById('import-preview');
+  if (preview) { preview.hidden = true; preview.innerHTML = ''; }
+  setImportBusy(true);
+  setImportStatus(`正在读取「${file.name}」…`);
+  try {
+    const source = await readImportFile(file, {
+      report: (message) => setImportStatus(message),
+      progress: (value) => {
+        if (typeof value !== 'number' || !Number.isFinite(value)) return;
+        const percent = Math.max(1, Math.min(99, Math.round(value * 100)));
+        setImportStatus(`正在识别文字… ${percent}%`);
+      },
+    });
+    const parsed = parseImportSource(source, activeWords(app.state));
+    const textSnapshot = source.kind === 'text' ? source.text : '';
+    const area = document.getElementById('import-text');
+    if (area) area.value = textSnapshot;
+    app.importDraft = {
+      ...parsed,
+      warnings: [...(parsed.warnings || []), ...(source.warnings || [])],
+      textSnapshot,
+      sourceName: file.name,
+      sourceKind: source.kind,
+      dirty: false,
+    };
+    renderImportPreview(app.importDraft);
+    const skipped = parsed.conflicts.length + parsed.errors.length;
+    if (parsed.rows.length) {
+      setImportStatus(`已读取「${file.name}」：将导入 ${parsed.rows.length} 条，跳过 ${skipped} 条。核对后再点“确认导入”。`, 'ok');
+    } else {
+      setImportStatus(`已读取「${file.name}」，但没有找到能导入的词条。`, 'warn');
+    }
+  } catch (error) {
+    if (!(error instanceof ImportFileError)) console.error('[import]', error);
+    const message = error instanceof ImportFileError ? error.message : '这个文件没有读成功';
+    const hint = error instanceof ImportFileError ? error.hint : '换一个文件再试，或把内容直接粘贴进来。';
+    showFormError('import-error', hint ? `${message}。${hint}` : message);
+    setImportStatus(message, 'error');
+    app.importDraft = null;
+  } finally {
+    setImportBusy(false);
+  }
+}
+
+function invalidateImportDraft() {
+  if (!app.importDraft) return;
+  const area = document.getElementById('import-text');
+  if (area && area.value === app.importDraft.textSnapshot) return;
+  app.importDraft = null;
+  const preview = document.getElementById('import-preview');
+  if (preview) { preview.hidden = true; preview.innerHTML = ''; }
+  updateImportButton();
+}
+
+function collectPreviewRecords() {
+  return [...document.querySelectorAll('#import-preview tbody tr')].map((row) => {
+    const value = (field) => row.querySelector(`[data-field="${field}"]`)?.value || '';
+    return {
+      type: value('type'),
+      term: value('term'),
+      definition: value('definition'),
+      example: value('example'),
+      source: value('source'),
+      near: value('near'),
+      far: value('far'),
+      line: Number(row.dataset.line) || 0,
+      where: row.dataset.where || '',
+    };
+  });
+}
+
+function confirmImport() {
+  clearFormError('import-error');
+  const records = collectPreviewRecords();
+  if (!records.length) return showFormError('import-error', '没有可以导入的词条。');
+  const parsed = finalizeRecords(records, activeWords(app.state));
   if (!parsed.rows.length) {
+    renderImportPreview({ ...parsed, warnings: app.importDraft?.warnings || [], sourceName: app.importDraft?.sourceName });
     const first = parsed.conflicts[0]?.reason || parsed.errors[0]?.reason || '没有找到可以导入的词条';
-    showFormError('import-error', `没有导入任何词条：${first}。`);
-    renderImportResult(parsed, 0);
+    showFormError('import-error', `这次没有导入新词：${first}。`);
     return;
   }
   const ops = buildImportOps(parsed.rows, uid);
   const outcome = dispatchMany(ops, { render: false });
   app.modalNeedsRender = true;
-  renderImportResult({ ...parsed, skipped: outcome.skipped }, outcome.applied);
-  form.querySelector('button[type="submit"]').disabled = true;
-  toast(`导入了 ${outcome.applied} 个词，重复 ${parsed.conflicts.length} 个。`);
+  const skipped = parsed.conflicts.length + parsed.errors.length;
+  renderImportResult({ ...parsed, warnings: app.importDraft?.warnings || [] }, outcome.applied, skipped);
+  const button = document.getElementById('import-submit');
+  if (button) { button.disabled = true; button.innerHTML = `${icon('check', 15)}已导入`; }
+  setImportStatus(`已导入 ${outcome.applied} 个词，跳过 ${skipped} 条。只写进你自己的词库。`, 'ok');
+  app.importDraft = null;
+  toast(`导入了 ${outcome.applied} 个词，跳过 ${skipped} 条。`);
 }
 
-function renderImportResult(parsed, imported) {
+function handleImportSubmit(form) {
+  if (app.importBusy) return;
+  clearFormError('import-error');
+  const text = String(new FormData(form).get('text') || '').trim();
+  const area = document.getElementById('import-text');
+  if (app.importDraft && !app.importDraft.dirty && area && area.value === app.importDraft.textSnapshot) {
+    confirmImport();
+    return;
+  }
+  if (!text) return showFormError('import-error', '请先选择一个文件，或把词表内容粘贴进来。');
+  setImportBusy(true);
+  setImportStatus('正在整理词条，生成预览…');
+  setTimeout(() => {
+    try {
+      const parsed = parseImport(text, activeWords(app.state));
+      app.importDraft = {
+        ...parsed,
+        warnings: parsed.warnings || [],
+        textSnapshot: text,
+        sourceName: '粘贴内容',
+        sourceKind: 'text',
+        dirty: false,
+      };
+      renderImportPreview(app.importDraft);
+      const skipped = parsed.conflicts.length + parsed.errors.length;
+      if (parsed.rows.length) setImportStatus(`将导入 ${parsed.rows.length} 条，跳过 ${skipped} 条。核对后再点“确认导入”。`, 'ok');
+      else setImportStatus('没有找到能导入的词条，请看下面的原因。', 'warn');
+    } catch (error) {
+      console.error('[import][text]', error);
+      showFormError('import-error', '这段内容没有整理成功，可以检查一下格式再试。');
+      setImportStatus('没有整理成功', 'error');
+    } finally {
+      setImportBusy(false);
+    }
+  }, 30);
+}
+
+function renderImportResult(parsed, imported, skippedCount = 0) {
   const box = document.getElementById('import-result');
   if (!box) return;
-  const errors = parsed.errors || [];
   const conflicts = parsed.conflicts || [];
+  const errors = parsed.errors || [];
   const lines = [
-    ...conflicts.slice(0, 30).map((item) => `第 ${item.line} 行「${escapeHtml(item.term)}」：${escapeHtml(item.reason)}`),
-    ...errors.slice(0, 30).map((item) => `第 ${item.line || '?'} 行：${escapeHtml(item.reason)}`),
+    ...conflicts.slice(0, 30).map((item) => `${importLocation(item)}「${escapeHtml(item.term || '')}」：${escapeHtml(item.reason)}`),
+    ...errors.slice(0, 30).map((item) => `${importLocation(item)}${escapeHtml(item.reason)}`),
   ];
   box.hidden = false;
   box.className = `import-result ${imported ? 'ok' : 'warn'}`;
   box.innerHTML = `<strong>${imported ? `成功导入 ${imported} 个词。` : '这次没有导入新词。'}</strong>
-    ${conflicts.length ? ` 跳过重复 ${conflicts.length} 个。` : ''}${errors.length ? ` 有 ${errors.length} 行格式不对。` : ''}
+    ${skippedCount ? ` 跳过 ${skippedCount} 条${conflicts.length || errors.length ? `（重复 ${conflicts.length}，不合格 ${errors.length}）` : ''}。` : ''}
     ${lines.length ? `<ul>${lines.map((line) => `<li>${line}</li>`).join('')}</ul>` : ''}
     ${imported ? '<div class="small" style="margin-top:8px">导入的词只在你自己的词库里，不会影响别人。关闭窗口后可在“我的词库”里找到。</div>' : ''}`;
 }
@@ -1083,7 +1288,21 @@ function handleClick(event) {
       break;
     }
     case 'delete-word': deleteWord(actionEl.dataset.id); break;
-    case 'open-import': openModal(renderImportModal()); break;
+    case 'open-import':
+      app.importDraft = null;
+      app.importBusy = false;
+      openModal(renderImportModal());
+      break;
+    case 'import-remove-row': {
+      const row = actionEl.closest('tr');
+      if (row) row.remove();
+      const count = document.querySelectorAll('#import-preview tbody tr').length;
+      const label = document.getElementById('import-keep-count');
+      if (label) label.textContent = String(count);
+      clearFormError('import-error');
+      updateImportButton();
+      break;
+    }
     case 'new-group': openGroupModal(); break;
     case 'edit-group': openGroupModal(app.state.groups[actionEl.dataset.id]); break;
     case 'delete-group': deleteGroup(actionEl.dataset.id); break;
@@ -1146,6 +1365,8 @@ function handleInput(event) {
     app.ui.mistakeSearch = target.value;
     clearTimeout(mistakeSearchTimer);
     mistakeSearchTimer = setTimeout(() => render({ keepScroll: true }), 180);
+  } else if (target.id === 'import-text') {
+    invalidateImportDraft();
   }
 }
 

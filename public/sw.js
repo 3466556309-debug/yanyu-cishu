@@ -1,4 +1,4 @@
-const CACHE_NAME = 'yanyu-cishu-v2-20261110-1';
+const CACHE_NAME = 'yanyu-cishu-v3-20261111-1';
 const INDEX_URL = new URL('./index.html', self.location.href).href;
 const SHELL_URL = new URL('./', self.location.href).href;
 // 相对路径：在根域名和 GitHub Pages 的 /yanyu-cishu/ 前缀下都能用。
@@ -11,6 +11,8 @@ const APP_SHELL = [
   './js/db.js',
   './js/icons.js',
   './js/importer.js',
+  './js/import-core.js',
+  './js/import-files.js',
   './js/mode.js',
   './js/practice.js',
   './js/util.js',
@@ -25,6 +27,13 @@ const APP_SHELL = [
   './icons/icon-512.png',
   './icons/icon-maskable-512.png',
   './icons/apple-touch-icon.png',
+  // 导入解析器：体积不大，先缓存；中文识字部件首次使用时再按需加载。
+  './vendor/fflate/fflate.mjs',
+  './vendor/xlsx/xlsx.mjs',
+  './vendor/pdfjs/pdf.min.mjs',
+  './vendor/pdfjs/pdf.worker.min.mjs',
+  './vendor/tesseract/tesseract.esm.min.js',
+  './vendor/tesseract/worker.min.js',
 ];
 
 self.addEventListener('install', (event) => {

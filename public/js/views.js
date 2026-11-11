@@ -692,13 +692,21 @@ export function renderImportModal() {
     <div class="modal wide" role="dialog" aria-modal="true" aria-labelledby="import-title">
       <div class="modal-head"><div><h2 id="import-title">导入讲义或词表</h2><p>只导入你自己的词库，不会影响别人。</p></div><button class="modal-close" data-action="close-modal" aria-label="关闭">${icon('x', 18)}</button></div>
       <div class="modal-body">
-        <p class="modal-intro">支持从 Excel 另存的表格文件（CSV/TXT），也可以粘贴内容或用备份文件。第一行写表头。只有<b>同一类型里字面完全一样</b>的词算重复：重复的跳过，其余照常导入。</p>
-        <div class="import-format">类型,词语,释义,例句,来源,近义,干扰\n成语,一蹴而就,踏一步就成功……,关键核心技术不可能一蹴而就。,自编,一步登天,循序渐进\n实词,截至,截止到某个时候……,截至10月底……,自编,截止,开始</div>
+        <p class="modal-intro">可以直接选 <b>Excel（.xlsx/.xls）</b>、<b>Word（.docx）</b>、<b>PDF</b>、<b>图片</b>，也可以继续用 CSV/TXT/TSV/JSON 或粘贴。文件只在这台设备的浏览器里读取；图片和扫描件也在本机识字，不上传。先出<b>预览</b>，你确认后才写进词库。</p>
+        <div class="import-format">类型,词语,释义,例句,来源,近义,干扰
+成语,一蹴而就,踏一步就成功……,关键核心技术不可能一蹴而就。,自编,一步登天,循序渐进
+实词,截至,截止到某个时候……,截至10月底……,自编,截止,开始</div>
         <form id="import-form" novalidate>
-          <div class="field"><label for="import-file">选择文件</label><input class="input" id="import-file" type="file" accept=".csv,.txt,.tsv,.json,text/csv,text/plain,application/json"><span class="hint">也可以直接把内容粘在下面。</span></div>
-          <div class="field"><label for="import-text">或者粘贴内容</label><textarea class="textarea" id="import-text" name="text" rows="7" placeholder="把词表内容粘到这里……"></textarea></div>
+          <div class="field">
+            <label for="import-file">选择文件</label>
+            <input class="input" id="import-file" type="file" accept=".csv,.txt,.tsv,.json,.xlsx,.xls,.xlsm,.docx,.pdf,.jpg,.jpeg,.png,.webp,.bmp,.gif,text/csv,text/plain,application/json,application/pdf,image/*">
+            <span class="hint">手机上可以直接从相册选图片。旧版 .doc 请先在 Word 里另存为 .docx 或 PDF。</span>
+          </div>
+          <div class="import-status" id="import-status" role="status" aria-live="polite"></div>
+          <div class="field"><label for="import-text">或者粘贴内容</label><textarea class="textarea" id="import-text" name="text" rows="6" placeholder="把词表或讲义内容粘到这里……"></textarea><span class="hint">粘贴后点“生成预览”，确认无误再导入。同一类型里字面完全一样的词会跳过，不会覆盖已有词。</span></div>
           <p class="form-error" id="import-error" role="alert"></p>
-          <div class="modal-footer"><button class="btn ghost" type="button" data-action="close-modal">取消</button><button class="btn primary" type="submit">${icon('upload', 15)}开始导入</button></div>
+          <div id="import-preview" class="import-preview" hidden></div>
+          <div class="modal-footer"><button class="btn ghost" type="button" data-action="close-modal">取消</button><button class="btn primary" id="import-submit" type="submit">${icon('upload', 15)}生成预览</button></div>
         </form>
         <div id="import-result" class="import-result" hidden></div>
       </div>
