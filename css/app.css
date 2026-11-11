@@ -669,6 +669,38 @@ h1, h2, h3, h4 { font-family: var(--serif); font-weight: 600; line-height: 1.35;
 .import-result.ok { color: var(--pine); }
 .import-result.warn { color: #8a5b16; }
 .import-result ul { margin: 6px 0 0; padding-left: 18px; max-height: 130px; overflow: auto; }
+
+.import-status { margin: 0 0 12px; padding: 9px 12px; border-radius: 8px; background: var(--card-soft); color: var(--muted); font-size: 12px; line-height: 1.7; }
+.import-status:empty { display: none; }
+.import-status.ok { background: #eaf3ed; color: var(--pine); }
+.import-status.warn { background: #fbf2df; color: #8a5b16; }
+.import-status.error { background: #f9e8e4; color: #8c3524; }
+.import-preview { margin-top: 14px; padding-top: 13px; border-top: 1px solid var(--line); }
+.import-preview-head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; margin-bottom: 9px; }
+.import-preview-head strong { font-size: 13px; }
+.import-preview-head .pill { flex: 0 0 auto; max-width: 48%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.import-warn { margin: 8px 0; padding: 9px 11px; border-radius: 8px; background: #fbf2df; color: #7d5314; font-size: 11px; line-height: 1.7; }
+.import-skip { margin: 8px 0; font-size: 11px; color: #8a5b16; }
+.import-skip summary { cursor: pointer; padding: 5px 0; }
+.import-skip ul { margin: 5px 0 0; padding-left: 18px; max-height: 100px; overflow: auto; line-height: 1.75; }
+.import-table-wrap { max-height: 44vh; overflow: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--card); }
+.import-table { width: 100%; min-width: 920px; border-collapse: separate; border-spacing: 0; }
+.import-table th { position: sticky; top: 0; z-index: 1; padding: 7px 6px; background: var(--card-soft); border-bottom: 1px solid var(--line); text-align: left; font-size: 10px; color: var(--muted); font-weight: 600; white-space: nowrap; }
+.import-table td { padding: 5px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.import-table tr:last-child td { border-bottom: 0; }
+.import-table .input, .import-table .textarea { min-height: 30px; padding: 5px 6px; font-size: 11px; line-height: 1.55; border-radius: 6px; }
+.import-table .textarea { min-height: 48px; resize: vertical; }
+.import-table td:nth-child(3), .import-table td:nth-child(4) { min-width: 180px; }
+.import-table td:nth-child(1) { min-width: 72px; }
+.import-table td:nth-child(2) { min-width: 100px; }
+.import-table .import-remove { margin-top: 3px; color: var(--muted); }
+.import-empty { margin-top: 8px; padding: 12px; border-radius: 8px; background: var(--card-soft); font-size: 12px; color: var(--muted); }
+.import-tip { margin-top: 8px; line-height: 1.7; }
+@media (max-width: 720px) {
+  .import-preview-head { display: block; }
+  .import-preview-head .pill { display: inline-flex; margin-top: 6px; max-width: 100%; }
+  .import-table-wrap { max-height: 50vh; }
+}
 .toast-root { position: fixed; z-index: 200; left: 50%; bottom: max(24px, env(safe-area-inset-bottom)); transform: translateX(-50%); display: grid; gap: 8px; width: min(92vw, 440px); pointer-events: none; }
 .toast {
   padding: 11px 16px; border-radius: 10px; background: var(--pine-ink); color: #f7f2e6;
