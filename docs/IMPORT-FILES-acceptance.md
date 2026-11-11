@@ -3,7 +3,7 @@
 - 任务：`docs/DSH-TASK-IMPORT-FILES.md`
 - 验收日期：2026-11-11
 - 工作目录：`/workspace/dsh-projects/yanyu-cishu/`
-- 源码提交：`1a91d70`（master；功能提交 `5570896`，随后补验收说明）
+- 源码功能提交：`5570896`（master；验收文档为后续文档提交）
 - Pages 发布提交：`ec00de8`（gh-pages）
 - 公网 Pages：https://3466556309-debug.github.io/yanyu-cishu/
 - Cloudflare 登录版：https://yanyu-cishu.cishu-3466556309.workers.dev/（本轮**未更新**，原因见第 8 节）
