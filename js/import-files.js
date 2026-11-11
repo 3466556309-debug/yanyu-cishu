@@ -295,7 +295,7 @@ function pdfErrorClass(error) {
   const name = String(error?.name || '');
   const message = String(error?.message || '');
   if (name === 'PasswordException' || /PasswordException|password/i.test(message)) return 'password';
-  if (name === 'InvalidPDFException' || /Invalid PDF structure|Invalid PDF|PDF header|xref/i.test(message)) return 'invalid';
+  if (name === 'InvalidPDFException' || /Invalid PDF structure|Invalid PDF|PDF header|xref|\bempty\b|No PDF/i.test(message)) return 'invalid';
   if (name === 'MissingPDFException' || name === 'UnexpectedResponseException') return 'unreadable';
   return 'engine';
 }
