@@ -248,6 +248,340 @@ export function guessTableMap(rows) {
   return map;
 }
 
+/* ==================== PDF 多列表格（按坐标） ==================== */
+
+const PDF_COLUMN_GAP = 20;
+const PDF_ROW_TOLERANCE = 2.6;
+const PDF_CELL_GAP = 3.5;
+
+function pdfNoiseText(value) {
+  const text = String(value == null ? '' : value).replace(/\s+/g, '');
+  if (!text) return true;
+  if (looksLikePageNumber(text)) return true;
+  if (/^[（(]?\d+\s*个[)）]?$/.test(text)) return true;
+  if (/^(删除|已删除|略|无|更多|备注)$/.test(text)) return true;
+  if (/^第[一二三四五六七八九十百千\d]+组$/.test(text)) return true;
+  if (/(更多免费|免费资料|公众号|微信号|qq群|扫码|关注|花生十三|800词|记忆版|讲义)/i.test(text)) return true;
+  return false;
+}
+
+function pdfTermCandidate(value) {
+  const term = cleanTerm(value);
+  if (!term || pdfNoiseText(term) || headerLike(term)) return false;
+  const length = charLength(term);
+  if (length < 2 || length > 24) return false;
+  if (/[。！？；;，,：:]/.test(term)) return false;
+  if (/\s/.test(term)) return false;
+  // 词条至少要有一个汉字；纯数字、纯符号、页眉页脚都不要。
+  if (!/[\u3400-\u9fff]/.test(term)) return false;
+  // 表格里的分类/小标题通常是短句，不含顿号；真正的词条不会以“的/了/着”收尾。
+  if (length >= 6 && /[的了着地得]$/.test(term)) return false;
+  return term;
+}
+
+function joinPdfPieces(pieces) {
+  let output = '';
+  for (const raw of pieces || []) {
+    const piece = String(raw || '').trim();
+    if (!piece) continue;
+    if (!output) {
+      output = piece;
+      continue;
+    }
+    const left = output.slice(-1);
+    const right = piece[0] || '';
+    const cjk = /[\u3000-\u9fff\uff00-\uffef]/.test(left) || /[\u3000-\u9fff\uff00-\uffef]/.test(right);
+    output += cjk ? piece : ` ${piece}`;
+  }
+  return output;
+}
+
+function pdfVisualLines(items) {
+  const glyphs = [];
+  for (const item of items || []) {
+    const str = String(item?.str == null ? '' : item.str);
+    if (!str.trim()) continue;
+    const transform = item.transform || [];
+    const x = Number(transform[4]) || 0;
+    const y = Number(transform[5]) || 0;
+    const width = Number(item.width) || 0;
+    const height = Math.abs(Number(transform[3]) || Number(item.height) || 10);
+    glyphs.push({ str, x, y, width, height });
+  }
+  if (!glyphs.length) return [];
+
+  glyphs.sort((a, b) => b.y - a.y || a.x - b.x);
+  const rows = [];
+  for (const glyph of glyphs) {
+    let row = null;
+    for (const candidate of rows) {
+      if (Math.abs(candidate.y - glyph.y) <= Math.max(1.6, Math.min(candidate.height, glyph.height) * 0.25)) {
+        row = candidate;
+        break;
+      }
+    }
+    if (!row) {
+      row = { y: glyph.y, height: glyph.height, items: [] };
+      rows.push(row);
+    }
+    row.items.push(glyph);
+    row.height = Math.max(row.height, glyph.height);
+  }
+  rows.sort((a, b) => b.y - a.y);
+
+  const lines = [];
+  for (const row of rows) {
+    row.items.sort((a, b) => a.x - b.x);
+    const cells = [];
+    let current = null;
+    for (const glyph of row.items) {
+      if (!current) {
+        current = { x0: glyph.x, x1: glyph.x + glyph.width, text: glyph.str };
+        continue;
+      }
+      const gap = glyph.x - current.x1;
+      if (gap > Math.max(PDF_CELL_GAP, Math.min(glyph.height, row.height || glyph.height) * 0.3)) {
+        cells.push(current);
+        current = { x0: glyph.x, x1: glyph.x + glyph.width, text: glyph.str };
+      } else {
+        const left = current.text.slice(-1);
+        const right = glyph.str[0] || '';
+        const cjk = /[\u3000-\u9fff\uff00-\uffef]/.test(left) || /[\u3000-\u9fff\uff00-\uffef]/.test(right);
+        if (!cjk && gap > 0.6 && !/\s$/.test(current.text) && !/^\s/.test(glyph.str)) current.text += ' ';
+        current.text += glyph.str;
+        current.x1 = Math.max(current.x1, glyph.x + glyph.width);
+      }
+    }
+    if (current) cells.push(current);
+    const cleaned = cells
+      .map((cell) => ({ ...cell, text: cell.text.trim() }))
+      .filter((cell) => cell.text);
+    if (cleaned.length) lines.push({ y: row.y, height: row.height, cells: cleaned });
+  }
+  return lines;
+}
+
+function pdfColumnBands(lines) {
+  const starts = [];
+  for (const line of lines) {
+    for (const cell of line.cells) starts.push(cell.x0);
+  }
+  starts.sort((a, b) => a - b);
+  const bands = [];
+  for (const x of starts) {
+    const last = bands[bands.length - 1];
+    if (!last || x - last.end > PDF_COLUMN_GAP) {
+      bands.push({ start: x, end: x, values: [] });
+    } else {
+      last.end = x;
+    }
+  }
+  // 只有出现多次的起笔位置才像表格列，避免把某一行的偶然缩进当列。
+  const counted = bands.map((band) => ({ ...band, count: 0 }));
+  for (const line of lines) {
+    for (const cell of line.cells) {
+      const band = counted.find((item) => cell.x0 >= item.start - 0.5 && cell.x0 <= item.end + 0.5);
+      if (band) {
+        band.count += 1;
+        band.values.push(cell.text);
+      }
+    }
+  }
+  return counted.filter((band) => band.count >= 2);
+}
+
+/**
+ * 从 pdf.js 每页的 textContent.items 还原「词语 + 释义」多列表格。
+ *
+ * 这份 iOS Quartz 讲义每一行是四个视觉列（大类/小类/成语/解释），
+ * 释义经常比成语高半行、并且折成多行。这里不靠字符数猜，而是先按
+ * 坐标还原视觉行和单元格，再按列起笔位置找词语列/解释列，最后从
+ * 词条位置向上找到这一段的起始行，把同一词条的折行释义拼回去。
+ *
+ * @param {Array<Array>} pages 每页的 textContent.items
+ * @returns {{tables: Array, text: string, errors: Array, warnings: string[], detected: boolean}}
+ */
+export function extractPdfTableSource(pages) {
+  const pageLines = (pages || []).map((items) => pdfVisualLines(items));
+  const allLines = pageLines.flat();
+  const bands = pdfColumnBands(allLines);
+
+  // 同时看“词语列 + 紧挨着的右侧解释列”：分类列、小类列也可能
+  // 是四个字，单看词语分容易选错；成对的解释列得分更可靠。
+  let termBand = null;
+  let definitionBand = null;
+  let pairScore = -Infinity;
+  for (let index = 0; index < bands.length; index += 1) {
+    const band = bands[index];
+    if (band.values.length < 2) continue;
+    const next = bands.slice(index + 1).find((item) => item.values.length >= 2);
+    if (!next) continue;
+    const values = band.values.slice(0, 400);
+    const noise = values.filter((value) => pdfNoiseText(value) || headerLike(value)).length / Math.max(1, values.length);
+    const termScore = scoreTermColumn(values) - noise * 5;
+    const definitionScore = scoreDefinitionColumn(next.values.slice(0, 400));
+    const score = termScore + definitionScore;
+    if (termScore >= 1 && definitionScore >= 0.5 && score > pairScore) {
+      pairScore = score;
+      termBand = band;
+      definitionBand = next;
+    }
+  }
+
+  // 列不够、样本太少或不像表格时，交回原来的“按版面文字抽词”路径。
+  if (!termBand || !definitionBand
+    || termBand.values.length < 2 || definitionBand.values.length < 2) {
+    return { tables: [], text: '', errors: [], warnings: [], detected: false };
+  }
+
+  const bandOf = (cell) => {
+    if (cell.x0 >= termBand.start - 1 && cell.x0 <= termBand.end + 1) return 'term';
+    // 解释列可能很宽，右侧还有续写的注解/例句；统一归到解释列。
+    if (cell.x0 >= definitionBand.start - 1) return 'definition';
+    if (cell.x0 < termBand.start) return 'left';
+    return '';
+  };
+
+  const tables = [];
+  const residual = [];
+  const errors = [];
+  let entries = 0;
+
+  pageLines.forEach((lines, pageIndex) => {
+    const where = `PDF 第 ${pageIndex + 1} 页`;
+    const terms = [];
+    for (const line of lines) {
+      const cell = line.cells.find((item) => bandOf(item) === 'term');
+      if (!cell) continue;
+      const term = pdfTermCandidate(cell.text);
+      if (term) terms.push({ term, y: line.y, source: cell.text });
+    }
+    terms.sort((a, b) => b.y - a.y);
+
+    const definitionLines = lines
+      .filter((line) => line.cells.some((cell) => bandOf(cell) === 'definition'))
+      .sort((a, b) => b.y - a.y);
+
+    // 找每个词条的释义起始行：优先同一视觉行，其次紧贴词条上方半行
+    // （iOS Quartz 常把首行释义排得比成语高一点），最后才看下方。
+    // 之后的折行都归到这个起始行所在的词条，直到下一个词条的起始行。
+    const lineDefinitionText = (line) => line.cells
+      .filter((cell) => bandOf(cell) === 'definition')
+      .map((cell) => cell.text)
+      .join(' ')
+      .trim();
+    const atOtherTerm = (y, self) => terms.some((item) => item !== self
+      && Math.abs(item.y - y) <= PDF_ROW_TOLERANCE);
+
+    const starts = terms.map((item) => {
+      const same = definitionLines.find((line) => Math.abs(line.y - item.y) <= PDF_ROW_TOLERANCE);
+      const above = definitionLines
+        .filter((line) => line.y > item.y + PDF_ROW_TOLERANCE)
+        .sort((a, b) => a.y - b.y)[0];
+      if (same) {
+        // 同一行有释义时，先判断上一行是不是这句话的折行：
+        // 上一行没有句末标点、且不是以续行标点开头，才把它并进来。
+        if (above && above.y <= item.y + 14 && !atOtherTerm(above.y, item)) {
+          const text = lineDefinitionText(above);
+          const complete = /[。！？；…]["”’」』）)]?$/.test(text);
+          const continuation = /^[、，。；：”’）」』】]/.test(text);
+          if (text && !complete && !continuation) return above;
+        }
+        return same;
+      }
+      // 没有同一行的释义：沿正常的行距向上找这一段的起始行，
+      // 遇到别的词条行就停下，避免把上一条释义的末尾并进来。
+      let cursor = item.y + PDF_ROW_TOLERANCE;
+      let start = null;
+      for (;;) {
+        const next = definitionLines
+          .filter((line) => line.y > cursor && line.y <= cursor + 12)
+          .sort((a, b) => a.y - b.y)[0];
+        if (!next || atOtherTerm(next.y, item)) break;
+        start = next;
+        cursor = next.y;
+      }
+      if (start) return start;
+      return definitionLines
+        .filter((line) => line.y < item.y - PDF_ROW_TOLERANCE && line.y >= item.y - 16)
+        .sort((a, b) => b.y - a.y)[0] || null;
+    });
+    for (let index = 1; index < starts.length; index += 1) {
+      if (starts[index] && starts[index - 1] && starts[index].y >= starts[index - 1].y) {
+        starts[index] = null;
+      }
+    }
+
+    const rows = [];
+    terms.forEach((item, index) => {
+      const start = starts[index];
+      const nextStart = starts[index + 1];
+      const top = start ? start.y + PDF_ROW_TOLERANCE : item.y;
+      const bottom = nextStart ? nextStart.y + PDF_ROW_TOLERANCE : -Infinity;
+      const pieces = definitionLines
+        .filter((line) => line.y <= top && line.y > bottom)
+        .sort((a, b) => b.y - a.y)
+        .flatMap((line) => line.cells.filter((cell) => bandOf(cell) === 'definition').map((cell) => cell.text))
+        .filter((text) => text && !pdfNoiseText(text) && !headerLike(text));
+      const definition = joinPdfPieces(pieces);
+      if (definition && charLength(definition) >= 2) {
+        rows.push([item.term, definition]);
+      } else {
+        errors.push({
+          line: index + 1,
+          where,
+          term: item.term,
+          reason: `“${item.term}”没有释义，已跳过`,
+        });
+      }
+    });
+
+    // 表格旁边的短正文（如“雷厉风行：形容……”）继续交给正文抽词；
+    // 分类列里的“中华文明传统”“第一组”“5个”不当成词条，只把标题性内容
+    // 放进跳过原因里，避免预览里出现大量错词。
+    for (const line of lines) {
+      const leftText = line.cells
+        .filter((cell) => bandOf(cell) === 'left')
+        .map((cell) => cell.text)
+        .join(' ')
+        .trim();
+      if (!leftText) continue;
+      const proseLike = !headerLike(leftText) && !pdfNoiseText(leftText)
+        && (/(?:[：:]|——|—)/.test(leftText) || /^\s*(?:\d+[、.．)）]|[·•●▪◆◇※])/.test(leftText))
+        && Boolean(matchInlineEntry(leftText));
+      if (proseLike) {
+        residual.push(leftText);
+        continue;
+      }
+      if (pdfNoiseText(leftText) || headerLike(leftText)) continue;
+      if (/^第[一二三四五六七八九十百千\d]+组$/.test(leftText.replace(/\s+/g, ''))) {
+        errors.push({ line: 1, where, term: leftText, reason: `“${leftText}”是分类小标题，没有释义，已跳过` });
+      } else if (charLength(leftText) <= 12 && /^[\u3400-\u9fff]+$/.test(leftText)
+        && !/(二级|三级|四级|五级|六级)$/.test(leftText)) {
+        errors.push({ line: 1, where, term: leftText, reason: `“${leftText}”是分类小标题，没有释义，已跳过` });
+      }
+    }
+
+    if (rows.length) {
+      entries += rows.length;
+      tables.push({ name: `${where} `, rows: [['词语', '释义'], ...rows] });
+    }
+  });
+
+  if (!entries) return { tables: [], text: '', errors: [], warnings: [], detected: false };
+
+  return {
+    tables,
+    text: residual.join('\n'),
+    errors: errors.slice(0, 200),
+    warnings: [
+      'PDF 里识别到「词语 + 释义」多列表格，已按列抽取；分类小标题和页眉页脚没有释义，已跳过。',
+      '释义折行已尽量按坐标拼回，仍请在预览里核对。',
+    ],
+    detected: true,
+  };
+}
+
 function completeMap(rows, map) {
   const output = { ...map };
   if (output.term == null || output.definition == null) {
@@ -328,7 +662,7 @@ function stripBullet(line) {
 function cleanTerm(value) {
   let term = String(value == null ? '' : value)
     .replace(/^[\s【\[（(《<]+/, '')
-    .replace(/[\s】\]）)》>]+$/, '')
+    .replace(/[\s】\]）)》>（(【\[《<]+$/, '')
     .replace(/^[“”"'‘’]+|[“”"'‘’]+$/g, '')
     .trim();
   term = term
@@ -723,7 +1057,7 @@ export function parseImportSource(source, existingWords = []) {
   const text = String(source?.text || '');
   const warnings = [...(source?.warnings || [])];
   const records = [];
-  const errors = [];
+  const errors = [...(Array.isArray(source?.errors) ? source.errors : [])];
 
   tables.forEach((table, index) => {
     const rows = Array.isArray(table) ? table : table?.rows;

@@ -10,6 +10,7 @@ import {
   recordsFromTable,
   extractDocxXml,
   layoutPdfText,
+  extractPdfTableSource,
 } from '../public/js/import-core.js';
 import * as XLSX from '../public/vendor/xlsx/xlsx.mjs';
 import { unzipSync } from '../public/vendor/fflate/fflate.mjs';
@@ -130,6 +131,66 @@ test('文字型 PDF 能抽出文字、表格和正文词条', async () => {
   ]);
 });
 
+
+
+test('PDF 失败提示分开说文件、密码和解析部件，不再一律说损坏', async () => {
+  const source = await readFile(path.join(ROOT, 'public', 'js', 'import-files.js'), 'utf8');
+  assert.doesNotMatch(source, /这个 PDF 打不开，可能已经损坏或不是真正的 PDF/);
+  assert.match(source, /这个 PDF 文件本身无效或没有下载完整/);
+  assert.match(source, /这个 PDF 没有损坏，但加了密码/);
+  assert.match(source, /PDF 解析部件在这个浏览器里没有启动成功/);
+  assert.match(source, /这份 PDF 能打开，但第 \$\{pageNumber\} 页的文字没有解析出来/);
+  // Worker 失败后要能回退到主线程，不能只换一句提示。
+  assert.match(source, /globalThis\.pdfjsWorker = \{ WorkerMessageHandler: handler \}/);
+});
+
+test('多列表格讲义 PDF 按坐标抽词，分类小标题和页脚不进词条', async () => {
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const data = new Uint8Array(await readFile(path.join(FIXTURES, 'table-lecture.pdf')));
+  const pdf = await pdfjs.getDocument({ data }).promise;
+  const pages = [];
+  for (let number = 1; number <= pdf.numPages; number += 1) {
+    const page = await pdf.getPage(number);
+    const content = await page.getTextContent();
+    pages.push(content.items);
+    page.cleanup();
+  }
+  const source = extractPdfTableSource(pages);
+  assert.equal(source.detected, true);
+  assert.ok(source.tables.length >= 1);
+
+  const parsed = parseImportSource(source);
+  assert.deepEqual(parsed.rows.map((row) => row.term), [
+    '雷厉风行', '一丝不苟', '鳞次栉比', '踌躇', '脚踏实地', '按部就班',
+  ]);
+  assert.match(parsed.rows[0].definition, /声势猛烈/);
+  assert.match(parsed.rows[0].definition, /执行力度/, '折行释义要按坐标拼回去');
+  assert.ok(parsed.rows.every((row) => row.definition.length >= 4));
+  // 分类小标题没有释义，进“跳过”并说明原因；页脚和“第一组/第二组”不能变成词。
+  assert.ok(parsed.errors.some((item) => /分类小标题/.test(item.reason)));
+  assert.ok(parsed.errors.every((item) => !/更多免费|公众号|页脚/.test(item.term || '')));
+  assert.ok(!parsed.rows.some((row) => /第一组|第二组|大类|小类|更多免费|公众号/.test(row.term)));
+});
+
+test('小表格 PDF 同时保留表格列和表格外的正文词条', async () => {
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const data = new Uint8Array(await readFile(path.join(FIXTURES, 'words.pdf')));
+  const pdf = await pdfjs.getDocument({ data }).promise;
+  const pages = [];
+  for (let number = 1; number <= pdf.numPages; number += 1) {
+    const page = await pdf.getPage(number);
+    const content = await page.getTextContent();
+    pages.push(content.items);
+    page.cleanup();
+  }
+  const source = extractPdfTableSource(pages);
+  assert.equal(source.detected, true);
+  const parsed = parseImportSource(source);
+  assert.deepEqual(parsed.rows.map((row) => row.term), [
+    '鳞次栉比', '踌躇', '雷厉风行', '一丝不苟',
+  ]);
+});
+
 test('识字后的文字走同一套抽取逻辑', () => {
   const ocrText = [
     '言语理解常考词语',
@@ -143,7 +204,7 @@ test('识字后的文字走同一套抽取逻辑', () => {
 });
 
 test('测试夹具保持小巧，不塞大文件', async () => {
-  for (const name of ['words.xlsx', 'words.xls', 'words.docx', 'words.pdf', 'scan.png', 'scan.pdf', 'legacy.doc']) {
+  for (const name of ['words.xlsx', 'words.xls', 'words.docx', 'words.pdf', 'table-lecture.pdf', 'scan.png', 'scan.pdf', 'legacy.doc']) {
     const size = (await readFile(path.join(FIXTURES, name))).length;
     assert.ok(size < 100 * 1024, `${name} 夹具太大：${size}`);
   }

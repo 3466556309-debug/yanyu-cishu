@@ -263,6 +263,22 @@ async function parseImage(file, report, progress) {
   return { kind: 'image', text, tables: [], warnings: ['图片识字可能有错字，请在预览里核对后再导入。'] };
 }
 
+const PDF_WORKER_TIMEOUT_MS = 20000;
+
+function withTimeout(promise, ms, label) {
+  let timer = null;
+  const timeout = new Promise((resolve, reject) => {
+    timer = setTimeout(() => {
+      const error = new Error(`${label}超时`);
+      error.name = 'PDFWorkerTimeout';
+      reject(error);
+    }, ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 async function pdfjsModule() {
   let pdfjs;
   try {
@@ -273,6 +289,64 @@ async function pdfjsModule() {
   }
   pdfjs.GlobalWorkerOptions.workerSrc = vendorUrl('pdfjs/pdf.worker.min.mjs');
   return pdfjs;
+}
+
+function pdfErrorClass(error) {
+  const name = String(error?.name || '');
+  const message = String(error?.message || '');
+  if (name === 'PasswordException' || /PasswordException|password/i.test(message)) return 'password';
+  if (name === 'InvalidPDFException' || /Invalid PDF structure|Invalid PDF|PDF header|xref/i.test(message)) return 'invalid';
+  if (name === 'MissingPDFException' || name === 'UnexpectedResponseException') return 'unreadable';
+  return 'engine';
+}
+
+/**
+ * 先按正常 Worker 打开；Worker 在 Safari / 旧 WebKit 上没起来时，
+ * 把 pdf.worker 模块加载到主线程再试一次。文件本身无效或加密时不做
+ * 这种重试，避免把真正的文件错误说成环境问题。
+ */
+async function openPdfDocument(pdfjs, bytes) {
+  const options = {
+    cMapUrl: vendorUrl('pdfjs/cmaps/'),
+    cMapPacked: true,
+    standardFontDataUrl: vendorUrl('pdfjs/standard_fonts/'),
+    isEvalSupported: false,
+  };
+  // 第一次尝试可能把 data 的底层 buffer 转移给 Worker，先留一份给主线程回退。
+  const retryBytes = bytes.slice();
+  let firstTask = null;
+  try {
+    firstTask = pdfjs.getDocument({ ...options, data: bytes });
+    return await withTimeout(firstTask.promise, PDF_WORKER_TIMEOUT_MS, 'PDF 解析部件启动');
+  } catch (firstError) {
+    if (firstTask) {
+      try { await firstTask.destroy(); } catch { /* 已经失败，忽略 */ }
+    }
+    const kind = pdfErrorClass(firstError);
+    if (kind === 'password' || kind === 'invalid' || kind === 'unreadable') throw firstError;
+
+    console.warn('[import][pdf-worker] Worker 没有启动成功，改用主线程再试：', firstError);
+    let workerModule;
+    try {
+      workerModule = await import('../vendor/pdfjs/pdf.worker.min.mjs');
+    } catch (importError) {
+      importError.cause = firstError;
+      throw importError;
+    }
+    const handler = workerModule.WorkerMessageHandler;
+    if (!handler) throw new Error('PDF worker 模块没有导出 WorkerMessageHandler');
+    // pdf.js 看到这个全局对象就会走 fake worker，不再依赖 Worker/module worker。
+    globalThis.pdfjsWorker = { WorkerMessageHandler: handler };
+
+    const secondTask = pdfjs.getDocument({ ...options, data: retryBytes });
+    try {
+      return await withTimeout(secondTask.promise, PDF_WORKER_TIMEOUT_MS * 2, 'PDF 主线程解析');
+    } catch (fallbackError) {
+      try { await secondTask.destroy(); } catch { /* 已经失败，忽略 */ }
+      fallbackError.cause = firstError;
+      throw fallbackError;
+    }
+  }
 }
 
 async function ocrPdf(pdf, report, progress) {
@@ -311,36 +385,68 @@ async function parsePdf(file, report, progress) {
   let pdf;
   try {
     const data = new Uint8Array(await file.arrayBuffer());
-    pdf = await pdfjs.getDocument({
-      data,
-      cMapUrl: vendorUrl('pdfjs/cmaps/'),
-      cMapPacked: true,
-      standardFontDataUrl: vendorUrl('pdfjs/standard_fonts/'),
-      isEvalSupported: false,
-    }).promise;
+    pdf = await openPdfDocument(pdfjs, data);
   } catch (error) {
     console.error('[import][pdf]', error);
-    if (String(error?.name || '').includes('Password')) {
-      fail('password', '这个 PDF 加了密码，浏览器里读不了', '先在 PDF 阅读器里去掉密码，或另存为没有密码的 PDF。');
+    const kind = pdfErrorClass(error);
+    if (kind === 'password') {
+      fail('password', '这个 PDF 没有损坏，但加了密码，浏览器里读不了',
+        '先在 PDF 阅读器里去掉密码（另存为没有密码的 PDF），再选一次。');
     }
-    fail('damaged', '这个 PDF 打不开，可能已经损坏或不是真正的 PDF',
-      '换一个 PDF 再试，或把需要的几页截图后按图片导入。');
+    if (kind === 'invalid' || kind === 'unreadable') {
+      fail('invalid', '这个 PDF 文件本身无效或没有下载完整',
+        '重新下载或另存一份普通 PDF 再试；如果原文件在阅读器里能打开，也可以把需要的几页截图后按图片导入。');
+    }
+    fail('pdf-engine', 'PDF 解析部件在这个浏览器里没有启动成功（文件本身不一定是坏的）',
+      '先刷新页面再试；还不行就换 Safari、Chrome 或 Edge，或把 PDF 另存为普通 PDF、把需要的几页截图后按图片导入。');
   }
 
-  const { layoutPdfText } = await import('./import-core.js');
+  const { layoutPdfText, extractPdfTableSource } = await import('./import-core.js');
   const warnings = [];
   const chunks = [];
-  for (let number = 1; number <= pdf.numPages; number += 1) {
-    report(`正在读取 PDF：第 ${number}/${pdf.numPages} 页…`);
-    progress?.(number / pdf.numPages);
-    const page = await pdf.getPage(number);
-    const content = await page.getTextContent();
-    const text = layoutPdfText(content.items);
-    if (text.trim()) chunks.push(text);
-    page.cleanup();
+  const pageItems = [];
+  let pageNumber = 0;
+  try {
+    for (pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+      report(`正在读取 PDF：第 ${pageNumber}/${pdf.numPages} 页…`);
+      progress?.(pageNumber / pdf.numPages);
+      const page = await pdf.getPage(pageNumber);
+      try {
+        const content = await page.getTextContent();
+        pageItems.push(content.items);
+        const text = layoutPdfText(content.items);
+        if (text.trim()) chunks.push(text);
+      } finally {
+        page.cleanup();
+      }
+    }
+  } catch (error) {
+    console.error('[import][pdf-page]', error);
+    fail('pdf-page', `这份 PDF 能打开，但第 ${pageNumber} 页的文字没有解析出来`,
+      '先刷新页面再试；还不行就把这几页截图后按图片导入，或另存一份普通 PDF。');
   }
+
   let text = chunks.join('\n');
   let scanned = false;
+
+  // 优先按坐标还原「大类/小类/成语/解释」多列表格；不是表格时才走旧版面文字。
+  let tableSource = null;
+  if (pageItems.length) {
+    try {
+      tableSource = extractPdfTableSource(pageItems);
+    } catch (error) {
+      console.error('[import][pdf-table]', error);
+    }
+  }
+  if (tableSource?.detected) {
+    return {
+      kind: 'pdf',
+      text: tableSource.text,
+      tables: tableSource.tables,
+      errors: tableSource.errors || [],
+      warnings: [...tableSource.warnings, ...warnings],
+    };
+  }
 
   if (text.replace(/\s/g, '').length < 20 && pdf.numPages > 0) {
     scanned = true;
@@ -359,7 +465,7 @@ async function parsePdf(file, report, progress) {
   if (!text.trim()) {
     fail('no-text', '这个 PDF 里没有读到文字', '如果整页是图片，可以截图后按图片导入；也可以改用表格。');
   }
-  if (!scanned) warnings.push('PDF 文字按版面抽取，表格列可能错位，请在预览里核对。');
+  if (!scanned) warnings.push('PDF 能打开，文字已按版面抽取；如果预览里的词条不对，是版面格式没识别好，不是文件坏了。可以把内容粘贴进来，或把页面截图按图片导入。');
   return { kind: 'pdf', text, tables: [], warnings };
 }
 

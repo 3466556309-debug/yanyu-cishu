@@ -1,4 +1,4 @@
-const CACHE_NAME = 'yanyu-cishu-v3-20261111-1';
+const CACHE_NAME = 'yanyu-cishu-v4-20261111-pdf';
 const INDEX_URL = new URL('./index.html', self.location.href).href;
 const SHELL_URL = new URL('./', self.location.href).href;
 // 相对路径：在根域名和 GitHub Pages 的 /yanyu-cishu/ 前缀下都能用。

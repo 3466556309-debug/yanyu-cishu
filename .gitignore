@@ -13,3 +13,4 @@ pages-dist/
 *.log
 .playwright/
 .tunnel/
+.tmp-user-pdf/
