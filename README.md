@@ -9,7 +9,9 @@
 打开就能用，不用注册、登录。词库和学习进度只保存在每个人自己的浏览器（IndexedDB）里，不会上传，也不会跨设备同步。换设备或清理浏览器数据后不会自动恢复；换设备前可在“设置”里下载备份。
 
 - 免费公开仓库 + GitHub Pages，0 元，无域名、无服务器数据库。
+- 「导入词表」可在浏览器本地直接读 Excel（.xlsx/.xls）、Word（.docx）、PDF、图片，也保留 CSV/TXT/TSV/JSON 和粘贴；先预览、可改可删，确认后才写入。
 - 与 Cloudflare 登录同步版并存，互不影响。
+- 导入格式说明：`docs/IMPORT-FILES-acceptance.md`
 - 发布与验收说明：`docs/PAGES-acceptance.md`
 - 重新构建：`npm run pages:build`，产物在 `pages-dist/`（gitignore）。
 - 公网/本机冒烟：`node scripts/smoke-pages.mjs <url>` 或 `node scripts/smoke-pages.mjs --dir pages-dist /yanyu-cishu/`

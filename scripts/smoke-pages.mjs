@@ -203,6 +203,11 @@ async function main() {
     const before = await readLocalState();
     if (!before.hasState || before.active !== 60) throw new Error(`初始词库不对：${JSON.stringify(before)}`);
 
+    await waitFor(
+      "navigator.serviceWorker.controller && navigator.serviceWorker.controller.state === 'activated'",
+      20000,
+      'Service Worker 激活',
+    );
     const pwa = await evaluate(`(async () => {
       const registration = await navigator.serviceWorker.ready;
       const keys = await caches.keys();
